@@ -1,0 +1,162 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Roberto Lo Prejato"
+date: "25 aprile 2019"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive summary
+In this report we are using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways (this information is contained in the classe variable). 
+The data are collected using devices such as Jawbone Up, Nike FuelBand, and Fitbit.
+More information about this database is available from the website [here](
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+We fitted three differen models:
+
+- Random Forest 
+- Linear Discriminant Analysis
+- Support Vector Machine
+
+Among the tested models the one with the greatest accuracy is Random Forest, and we use this model to predict the correct way the exercise is performed (classe variable) in the validation set of data.
+
+## Load Data
+First we have to load data and the necessary library for the study
+```{r load data, message=FALSE, warning=FALSE, cache=TRUE}
+#check package
+list.of.packages <- c("ggplot2","lattice","caret",
+                      "parallel","doParallel","e1071")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(ggplot2);library(lattice);library(caret);
+library(parallel);library(doParallel);library("e1071")
+
+#load data
+dataTrain <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"),header=TRUE)
+#validation data set
+validation <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),header=TRUE)
+```
+
+## Exploratory analysis
+```{r explore data, message=FALSE, warning=FALSE}
+str(dataTrain)
+dim(dataTrain)
+dim(validation)
+```
+
+The training data set is made of `r dim(dataTrain)[1]` observations on `r dim(dataTrain)[2]` columns, but we can notice that many columns have NA values or blank values on almost every observation; so we will remove them, because they will not produce any information. Moreover the first seven columns give information about the people who did the test, and also timestamps; so we can remove also this columns.
+
+```{r clean dataset, message=FALSE, warning=FALSE, cache=TRUE}
+# Here we get the indexes of the columns having at least 90% of NA or blank values on the training dataset
+indColToRemove <- which(colSums(is.na(dataTrain)|dataTrain=="")>0.9*dim(dataTrain)[1]) 
+dataTrainClean <- dataTrain[,-indColToRemove]
+dataTrainClean <- dataTrainClean[,-c(1:7)]
+dim(dataTrainClean)
+#near zero variation
+NZV <- nearZeroVar(dataTrainClean)
+length(NZV)
+```
+
+There are no other variable to eliminate from the data. So now we have only `r dim(dataTrainClean)[2]` columns in our dataset.
+Have a look at the distribution of the target variable in the dataset.
+
+```{r distribution of target variable, message=FALSE, warning=FALSE}
+plot(dataTrainClean$classe, col="blue",
+      xlab="classe", ylab="Frequency",
+      main = "Number of events for different exercices")
+```
+
+##Cross Validation - Splitting data
+We will use the validation set only at the and of the analysis, so we have to split the dataTrain into two different sample: 70% as train data and 30% as test data.
+
+We will use test data to checks accurancy and to test overfitting.
+
+```{r splitting data, message=FALSE, warning=FALSE, cache=TRUE}
+# create training & testing data sets
+set.seed(555)
+inTrain <- createDataPartition(y=dataTrainClean$classe, p=0.7, list=FALSE) 
+train <- dataTrainClean[inTrain,]; test <- dataTrainClean[-inTrain,]
+```
+
+##Train models
+We want to train 3 different model, a Linear Discriminant Analysis, Support Vector Machine and a Random Forset.
+
+To improove accurancy in a new set of data and to prevent overfitting, we will use a trainControl() with a k-fold cross-validation (with k=5).
+
+Now we can train our model on the train set of data and then we test the accurancy on test data using the confusion matrix.
+
+To reduce model training times, it's possible to configure parallel processing. This step is especially important for the random foreset which requires long training times when using a cross validation method.
+
+```{r train model, message=FALSE, warning=FALSE, cache=TRUE}
+# set up training run for x / y syntax because model format performs poorly
+x <- train[,-53]
+y <- train[,53]
+#Configure parallel processing
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+#Configure trainControl object for k-fold cross-validation
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+
+#random forest
+modRF <- train(x,y,data=train,method="rf",trControl = fitControl)
+
+#LInad Discriminant Analysis
+modLDA <- train(x,y, data=train, method="lda", trControl = fitControl)
+
+#Support Vector Machine
+modSVM<- svm(classe~., data=train, trControl = fitControl)
+
+#De-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+To validate the models we can check accurancy from the confusion matrix both in the train and test set
+```{r validation model, message=FALSE, warning=FALSE, cache=TRUE}
+#accurancy in train set
+matrixRF <- confusionMatrix(modRF$finalModel$predicted,train$classe)
+predLDA <- predict(modLDA,train)
+matrixLDA <- confusionMatrix(predLDA , train$classe)
+matrixSVM <- confusionMatrix(modSVM$fitted, train$classe)
+
+AccurancyTrain <- c(round(matrixRF$overall['Accuracy'],3),
+                    round(matrixSVM$overall['Accuracy'],3),
+                    round(matrixLDA$overall['Accuracy'],3))
+
+#accurancy in trest set
+predRF <- predict(modRF,test)
+predSVM <- predict(modSVM,test)
+predLDA <- predict(modLDA,test)
+
+AccurancyTest <- c(round(confusionMatrix(predRF,test$classe)$overall['Accuracy'],3),
+                   round(confusionMatrix(predSVM,test$classe)$overall['Accuracy'],3),
+                   round(confusionMatrix(predLDA,test$classe)$overall['Accuracy'],3))
+
+Accurancy <- data.frame(AccurancyTrain, AccurancyTest)
+rownames(Accurancy) <- c("Random Forest", "Linear Discriminant Analysis", "Support Vector Machine")
+Accurancy
+```
+
+By comparing the accuracy rate values of the three models, the best model is Random Forest. Have a look at this model and see the importance of predictors.
+
+```{r random forest model, message=FALSE, warning=FALSE}
+plot(modRF, main="Accuracy of Random forest model by number of predictors")
+
+# Compute the variable importance 
+MostImpVars <- varImp(modRF)
+MostImpVars
+```
+
+##Conclusion
+Among the trained models, the Random Forest turned out to be the one with the highest accuracy, so we use this model to predict the result in the validation set.
+
+```{r results , message=FALSE, warning=FALSE}
+Results <- predict(modRF, validation)
+Results
+```
