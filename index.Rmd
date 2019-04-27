@@ -2,7 +2,9 @@
 title: "Practical Machine Learning - Course Project"
 author: "Roberto Lo Prejato"
 date: "25 aprile 2019"
-output: html_document
+output: 
+  html_document: 
+    keep_md: yes
 ---
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
